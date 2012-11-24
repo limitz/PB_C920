@@ -47,11 +47,6 @@ class cap_exception_t
 		va_end(args); 
 	}
 
-	public: ~cap_exception_t()
-	{
-		if (_message) free(_message);
-	}	
-
 	public: const char* message() const { return _message; }
 	public: int error() const { return _errno; }
 };

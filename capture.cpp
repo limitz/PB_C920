@@ -19,7 +19,7 @@ int process_frame(void* data, size_t length, void* userdata)
 
 int main()
 {
-	FILE* fp = fopen("test.h264", "wb");
+	FILE* fp = fopen(FILENAME, "wb");
 	if (!fp) 
 	{
 		fprintf(stderr, "Unable to open file for writing: %s", FILENAME);

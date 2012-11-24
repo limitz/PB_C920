@@ -1,27 +1,40 @@
 #define DEBUG
+#define FILENAME "test.h264"
+#define MB(x) (x*1024*1024)
+
 #include "capture.h"
 
-static FILE* fp;
-
-int process_frame(void* data, size_t length)
+int process_frame(void* data, size_t length, void* userdata)
 {
 	static long bytes = 0;
-
+	FILE* fp = (FILE*) userdata;
+	
 	fwrite(data, 1, length, fp);
 	fflush(fp);
+
 	bytes+=length;
-	return bytes > 4*1024*1024 ? 0 : 1;
+
+	return bytes < MB(4) ? 1 : 0;
 }
 
 int main()
 {
-	cap_device_t* camera = 0;
-	fp = fopen("test.h264", "wb");
-	if (!fp) exit(-1);
+	FILE* fp = fopen("test.h264", "wb");
+	if (!fp) 
+	{
+		fprintf(stderr, "Unable to open file for writing: %s", FILENAME);
+		exit(EXIT_FAILURE);
+	}
 
 	try
 	{
-		camera = new cap_device_t("/dev/video0", 1280, 720, 20, process_frame);
+		cap_device_t* camera = new cap_device_t("/dev/video0", 1280, 720, 20, process_frame, fp);
+
+		camera->start();
+		while (camera->process()) /* keep running untill callback says it's done*/;
+		camera->stop();
+
+		delete camera;
 	}
 	catch (cap_exception_t &e)
 	{
@@ -33,13 +46,7 @@ int main()
 		printf("\n");
 	}
 
-	camera->start();
-
-	while (camera->process());
-
-	camera->stop();
 	fclose(fp);
-	if (camera) delete camera;
 
 	return 0;
 }

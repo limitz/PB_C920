@@ -30,7 +30,7 @@
 #define INFO(fmt, ...) {}
 #endif
 
-typedef int (*cap_buffer_cb)(void* data, size_t length);
+typedef int (*cap_buffer_cb)(void* data, size_t length, void* userdata);
 
 class cap_exception_t
 {
@@ -60,8 +60,9 @@ class cap_device_t
 	private: struct _buffer { void* data; size_t length; };
 	private: _buffer* _buffers;
 	private: cap_buffer_cb _process_cb;
+	private: void* _userdata;
 	
-	public: cap_device_t(const char* device_name, size_t width, size_t height, size_t fps, cap_buffer_cb cb)
+	public: cap_device_t(const char* device_name, size_t width, size_t height, size_t fps, cap_buffer_cb cb, void* userdata)
 	{
 		struct stat st;
 		v4l2_capability cap;
@@ -234,6 +235,7 @@ class cap_device_t
 
 		// set the callback
 		_process_cb = cb;
+		_userdata = userdata;
 
 		INFO("Done with setup of device %s", device_name);
 	}
@@ -326,8 +328,8 @@ class cap_device_t
 
 		assert(buffer.index < _num_buffers);
 
-		int r = -1;
-		if (_process_cb) r = _process_cb(_buffers[buffer.index].data, buffer.bytesused);
+		int r = 0;
+		if (_process_cb) r = _process_cb(_buffers[buffer.index].data, buffer.bytesused, _userdata);
 
 		// queue the buffer again
 		if (ioctl_ex(_fd, VIDIOC_QBUF, &buffer) == -1)

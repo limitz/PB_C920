@@ -1,2 +1,4 @@
 *.h264
+*.o
 capture
+rtsp/c920_service

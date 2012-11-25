@@ -38,6 +38,22 @@ struct _C920RtspServerClass
 	GstRTSPServerClass parent_class;
 };
 
-GType c920_rtsp_server_get_type();
+GType 
+c920_rtsp_server_get_type();
+
+int
+c920_rtsp_server_attach(C920RtspServer*);
+
+void 
+c920_rtsp_server_set_address(C920RtspServer*, const gchar*);
+
+const gchar*
+c920_rtsp_server_get_address(C920RtspServer*);
+
+void
+c920_rtsp_server_set_service(C920RtspServer*, const gchar*);
+
+const gchar*
+c920_rtsp_server_get_service(C920RtspServer*);
 
 #endif

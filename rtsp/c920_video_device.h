@@ -35,6 +35,8 @@
 #define C920_VIDEO_DEVICE_GET_CLASS(obj) \
 	(G_TYPE_INSTANCE_GET_CLASS((obj), C920_TYPE_VIDEO_DEVICE, C920VideoDeviceClass))
 
+typedef void (*C920VideoBufferFunc)(void* data, size_t length, gpointer userdata);
+
 typedef struct _C920VideoDevice		C920VideoDevice;
 typedef struct _C920VideoDeviceClass	C920VideoDeviceClass;
 typedef struct _C920VideoDevicePrivate	C920VideoDevicePrivate;
@@ -48,10 +50,6 @@ struct _C920VideoDevice
 struct _C920VideoDeviceClass
 {
 	GObjectClass parent_class;
-
-	void (*initialize) ();
-	void (*start) ();
-	void (*stop)  ();
 };
 
 GType 
@@ -89,5 +87,8 @@ c920_video_device_start(C920VideoDevice*);
 
 gboolean
 c920_video_device_stop(C920VideoDevice*);
+
+void 
+c920_video_device_set_callback(C920VideoDevice*, C920VideoBufferFunc, gpointer);
 
 #endif

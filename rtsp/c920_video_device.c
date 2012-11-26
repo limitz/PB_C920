@@ -31,12 +31,15 @@ struct _C920VideoDevicePrivate
 	// properties
 	gchar *device_name, *dump_file_name;
 	guint width, height, fps;
+	C920VideoBufferFunc cb;
+	gpointer cb_userdata;
 	
 	// device io
 	int fd;
 	gboolean started;
 	struct c920_buffer *buffers;
 	size_t num_buffers;
+	FILE *dump_file;
 };
 
 
@@ -251,12 +254,21 @@ void c920_video_device_set_dump_file_name(C920VideoDevice *self, const gchar *na
 
 	g_free(self->priv->dump_file_name);
 	self->priv->dump_file_name = g_strdup(name);
+	if (self->priv->dump_file) fclose(self->priv->dump_file);
+	if (name) self->priv->dump_file = fopen(name, "wb");
 }
 
 const gchar* c920_video_device_get_dump_file_name(C920VideoDevice *self)
 {
 	if (!C920_IS_VIDEO_DEVICE(self)) return NULL;
 	return self->priv->dump_file_name;
+}
+
+void c920_video_device_set_callback(C920VideoDevice *self, C920VideoBufferFunc callback, gpointer userdata)
+{
+	g_return_if_fail(C920_IS_VIDEO_DEVICE(self));
+	self->priv->cb = callback;
+	self->priv->cb_userdata = userdata;
 }
 
 static void c920_video_device_set_device_name(C920VideoDevice *self, const gchar* device_name)
@@ -273,6 +285,7 @@ const gchar* c920_video_device_get_device_name(C920VideoDevice *self)
 	if (!C920_IS_VIDEO_DEVICE(self)) return NULL;
 	return self->priv->device_name;
 }
+
 
 // DEVICE IO
 
@@ -364,8 +377,8 @@ static gboolean c920_video_device_setup_stream(C920VideoDevice *self)
 	if (ioctl_ex(fd, VIDIOC_S_FMT, &fmt) == -1)
 		WARNING_RETURN(FALSE, "Unable to set stream format for device: %s", device_name);
 
-	params.type = type;
 	memset(&params, 0, sizeof(params));
+	params.type = type;
 
 	if (ioctl_ex(fd, VIDIOC_G_PARM, &params) == -1)
 		WARNING_RETURN(FALSE, "Unable to get stream parameters for device: %s", device_name);
@@ -542,6 +555,14 @@ gboolean c920_video_device_process(gpointer userdata)
 		c920_video_device_stop(self);
 		WARNING_RETURN(FALSE, "Invalid buffer index for device: %s", device_name);
 	}
+
+	if (self->priv->dump_file)
+	{
+		fwrite(self->priv->buffers[buf.index].data, 1, buf.bytesused, self->priv->dump_file);
+		fflush(self->priv->dump_file);
+	}
+
+	if (self->priv->cb) self->priv->cb(self->priv->buffers[buf.index].data, buf.bytesused, self->priv->cb_userdata);
 
 	//if (_process_cb) _process_cb(_buffers[buffer.index].data, buffer.bytesused, _userdata);
 

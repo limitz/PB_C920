@@ -3,6 +3,7 @@
 
 #include "c920_global.h"
 #include "c920_rtsp_media_mapping.h"
+#include "c920_video_device.h"
 
 #define C920_TYPE_RTSP_SERVER \
 	(c920_rtsp_server_get_type())

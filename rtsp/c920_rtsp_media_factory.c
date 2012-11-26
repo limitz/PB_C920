@@ -9,7 +9,7 @@ G_DEFINE_TYPE(C920RtspMediaFactory, c920_rtsp_media_factory, GST_TYPE_RTSP_MEDIA
 
 struct _C920RtspMediaFactoryPrivate
 {
-	int dummy;
+	C920LiveSrc* live_src;
 };
 
 static void c920_rtsp_media_factory_class_init(C920RtspMediaFactoryClass*);
@@ -49,7 +49,7 @@ static void c920_rtsp_media_factory_init(C920RtspMediaFactory *self)
 static void c920_rtsp_media_factory_dispose(GObject *obj)
 {
 	C920RtspMediaFactory *self __unused = C920_RTSP_MEDIA_FACTORY(obj);
-	/* nothing to do for now */
+	g_object_unref(self->priv->live_src);
 	G_OBJECT_CLASS(c920_rtsp_media_factory_parent_class)->dispose(obj);
 }
 
@@ -80,7 +80,23 @@ static void c920_rtsp_media_factory_real_configure(GstRTSPMediaFactory *base, Gs
 
 static GstElement* c920_rtsp_media_factory_real_get_element(GstRTSPMediaFactory *base, const GstRTSPUrl *url)
 {
-	// todo: add own logic
+	// Create a live src
+	if (!C920_IS_RTSP_MEDIA_FACTORY(base)) return NULL;
+	
+	C920RtspMediaFactory* self = C920_RTSP_MEDIA_FACTORY(base);
+	gchar* device_name = g_strdup_printf("/dev%s", url->abspath);
+
+	self->priv->live_src = g_object_new(
+		C920_TYPE_LIVE_SRC, 
+		"device-name", device_name,
+		NULL);
+
+	g_free(device_name);	
+
+	// add h264parse
+	// add rtph264pay
+	// construct gstbin
+
 	return GST_RTSP_MEDIA_FACTORY_CLASS(c920_rtsp_media_factory_parent_class)->get_element(base, url);
 }
 

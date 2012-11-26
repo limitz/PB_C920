@@ -35,15 +35,7 @@ static void c920_rtsp_server_init(C920RtspServer *self)
 	self->priv->mapping = g_object_new(C920_TYPE_RTSP_MEDIA_MAPPING, NULL);
 
 	GstRTSPServer* base = GST_RTSP_SERVER(self);
-	gst_rtsp_server_set_address(base, C920_RTSP_HOST);
-	gst_rtsp_server_set_service(base, C920_RTSP_PORT);
 	gst_rtsp_server_set_media_mapping(base, GST_RTSP_MEDIA_MAPPING(self->priv->mapping));
-
-	g_debug("Starting C920 RTSP Server on %s:%s", C920_RTSP_HOST, C920_RTSP_PORT);
-	if (gst_rtsp_server_attach(base, NULL) == 0) g_critical("Unable to start RTSP server");
-	g_debug("Started RTSP server on %s:%s",C920_RTSP_HOST, C920_RTSP_PORT);
-
-	g_timeout_add_seconds(2, (GSourceFunc)c920_rtsp_server_timeout, self);
 }
 
 static void c920_rtsp_server_dispose(GObject *obj)
@@ -70,7 +62,12 @@ static gboolean c920_rtsp_server_timeout(C920RtspServer *self, gboolean ignored)
 
 int c920_rtsp_server_attach(C920RtspServer *self)
 {
-	return gst_rtsp_server_attach(GST_RTSP_SERVER(self), NULL);
+	int r = gst_rtsp_server_attach(GST_RTSP_SERVER(self), NULL);
+	if (r == 0) g_critical("Unable to start RTSP server on %s:%s", c920_rtsp_server_get_address(self), c920_rtsp_server_get_service(self));
+	g_print("Started RTSP server on %s:%s\n", c920_rtsp_server_get_address(self), c920_rtsp_server_get_service(self));
+
+	g_timeout_add_seconds(2, (GSourceFunc)c920_rtsp_server_timeout, self);	
+	return r;
 }
 
 void c920_rtsp_server_set_address(C920RtspServer *self, const gchar* address)

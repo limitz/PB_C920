@@ -1,7 +1,7 @@
 #ifndef C920_GLOBAL_H
 #define C920_GLOBAL_H
 
-#define DEBUG
+#define G_DEBUG
 
 #include <glib-object.h>
 

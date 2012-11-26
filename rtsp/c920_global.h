@@ -17,10 +17,6 @@
 
 #define __unused __attribute__((unused))
 
-#ifdef DEBUG
-#define INFO(fmt, ...) g_print(fmt "\n", ## __VA_ARGS__)
-#else
-#define INFO(fmt, ...) {}
-#endif
+#define WARNING_RETURN(r, fmt, ...) { g_warning(fmt "\n", ## __VA_ARGS__); return r; }
 
 #endif

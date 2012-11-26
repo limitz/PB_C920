@@ -30,7 +30,7 @@ static void c920_rtsp_server_class_init(C920RtspServerClass *cls)
 
 static void c920_rtsp_server_init(C920RtspServer *self)
 {
-	INFO("Initializing C920 RTSP Server");
+	g_debug("Initializing C920 RTSP Server");
 	self->priv = C920_RTSP_SERVER_GET_PRIVATE(self);
 	self->priv->mapping = g_object_new(C920_TYPE_RTSP_MEDIA_MAPPING, NULL);
 
@@ -39,9 +39,9 @@ static void c920_rtsp_server_init(C920RtspServer *self)
 	gst_rtsp_server_set_service(base, C920_RTSP_PORT);
 	gst_rtsp_server_set_media_mapping(base, GST_RTSP_MEDIA_MAPPING(self->priv->mapping));
 
-	INFO("Starting C920 RTSP Server on %s:%s", C920_RTSP_HOST, C920_RTSP_PORT);
+	g_debug("Starting C920 RTSP Server on %s:%s", C920_RTSP_HOST, C920_RTSP_PORT);
 	if (gst_rtsp_server_attach(base, NULL) == 0) g_critical("Unable to start RTSP server");
-	INFO("Started RTSP server on %s:%s",C920_RTSP_HOST, C920_RTSP_PORT);
+	g_debug("Started RTSP server on %s:%s",C920_RTSP_HOST, C920_RTSP_PORT);
 
 	g_timeout_add_seconds(2, (GSourceFunc)c920_rtsp_server_timeout, self);
 }

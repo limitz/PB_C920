@@ -28,9 +28,11 @@ struct c920_buffer
 
 struct _C920VideoDevicePrivate
 {
+	// properties
 	gchar *device_name, *dump_file_name;
 	guint width, height, fps;
 	
+	// device io
 	int fd;
 	gboolean started;
 	struct c920_buffer *buffers;
@@ -45,6 +47,8 @@ static void c920_video_device_set_property(GObject*, guint, const GValue*, GPara
 static void c920_video_device_dispose(GObject*);
 static void c920_video_device_finalize(GObject*);
 static void c920_video_device_set_device_name(C920VideoDevice*, const gchar*);
+
+static gboolean c920_video_device_process(gpointer userdata);
 
 static int ioctl_ex(int fh, int request, void* arg)
 {
@@ -136,7 +140,6 @@ static void c920_video_device_get_property(GObject* obj, guint pidx, GValue* val
 
 		case PROP_DUMP_FILE_NAME:
 			g_value_set_string(value, c920_video_device_get_dump_file_name(self));
-			/* todo: update dump file on the fly */
 			break;
 
 		default:
@@ -193,10 +196,12 @@ static void c920_video_device_finalize(GObject *obj)
 	g_free(self->priv->dump_file_name);
 
 	if (self->priv->started) c920_video_device_stop(self);
-	if (self->priv->fd) close(self->priv->fd);
-
+	
 	G_OBJECT_CLASS(c920_video_device_parent_class)->finalize(obj);
 }
+
+
+// PROPERTIES
 
 void c920_video_device_set_width(C920VideoDevice *self, guint width)
 {
@@ -204,8 +209,6 @@ void c920_video_device_set_width(C920VideoDevice *self, guint width)
 	g_return_if_fail(width > 0 && width <= 1920);
 
 	self->priv->width = width;
-	
-	g_debug("Setting frame width to %d for device %s", self->priv->width, self->priv->device_name);
 }
 
 guint c920_video_device_get_width(C920VideoDevice *self)
@@ -220,8 +223,6 @@ void c920_video_device_set_height(C920VideoDevice *self, guint height)
 	g_return_if_fail(height > 0 && height <= 1080);
 
 	self->priv->height = height;
-
-	g_debug("Setting frame height to %d for device %s", self->priv->height, self->priv->device_name);
 }
 
 guint c920_video_device_get_height(C920VideoDevice *self)
@@ -236,7 +237,6 @@ void c920_video_device_set_fps(C920VideoDevice *self, guint fps)
 	g_return_if_fail(fps > 0 && fps <= 30);
 
 	self->priv->fps = fps;
-	g_debug("Setting fps to %d for device %s", self->priv->fps, self->priv->device_name);
 }
 
 guint c920_video_device_get_fps(C920VideoDevice *self)
@@ -250,10 +250,7 @@ void c920_video_device_set_dump_file_name(C920VideoDevice *self, const gchar *na
 	g_return_if_fail(C920_IS_VIDEO_DEVICE(self));
 
 	g_free(self->priv->dump_file_name);
-	if (!name) self->priv->dump_file_name = NULL;
-	else self->priv->dump_file_name = g_strdup(name);
-
-	g_debug("Setting dump file to %s for device %s", self->priv->dump_file_name, self->priv->device_name);
+	self->priv->dump_file_name = g_strdup(name);
 }
 
 const gchar* c920_video_device_get_dump_file_name(C920VideoDevice *self)
@@ -264,59 +261,9 @@ const gchar* c920_video_device_get_dump_file_name(C920VideoDevice *self)
 
 static void c920_video_device_set_device_name(C920VideoDevice *self, const gchar* device_name)
 {
-	int fd;
-	struct stat st;
-	struct v4l2_capability cap;
-
-	g_return_if_fail(!C920_IS_VIDEO_DEVICE(self));
+	g_return_if_fail(C920_IS_VIDEO_DEVICE(self));
 	g_return_if_fail(device_name != NULL);
 
-	g_debug("Identifying device %s", device_name);
-        if (stat(device_name, &st) == -1)
-	{
-                g_warning("unable to identify device %s", device_name);
-		return;
-	}
-
-        g_debug("Testing to see if %s is a device", device_name);
-        if (!S_ISCHR(st.st_mode))
-	{
-                g_warning("%s is not a device", device_name);
-		return;
-	}
-
-        g_debug("Opening device %s as RDWR | NONBLOCK", device_name);
-        if ((fd = open(device_name, O_RDWR | O_NONBLOCK, 0)) == -1)
-	{
-                g_warning("cannot open device %s", device_name);
-		return;
-	}
-
-        g_debug("Querying V4L2 capabilities for device %s", device_name);
-        if (ioctl_ex(fd, VIDIOC_QUERYCAP, &cap) == -1)
-        {
-                if (errno == EINVAL) g_warning("%s is not a valid V4L2 device", device_name);
-                else g_warning("error in ioctl VIDIOC_QUERYCAP");
-		close(fd);
-		return;
-        }
-
-        g_debug("Testing if device %s is a streaming capture device", device_name);
-        if (!(cap.capabilities & V4L2_CAP_VIDEO_CAPTURE))
-	{
-                g_warning("%s is not a capture device", device_name);
-		close(fd);
-		return;
-	}
-
-        if (!(cap.capabilities & V4L2_CAP_STREAMING))
-	{
-                g_warning("%s is not a streaming device", device_name);
-		close(fd);
-		return;
-	}
-
-	self->priv->fd = fd;
 	g_free(self->priv->device_name);
 	self->priv->device_name = g_strdup(device_name);
 }
@@ -327,203 +274,283 @@ const gchar* c920_video_device_get_device_name(C920VideoDevice *self)
 	return self->priv->device_name;
 }
 
-gboolean c920_video_device_start(C920VideoDevice *self)
-{
-	size_t min, i;
+// DEVICE IO
 
-	struct v4l2_cropcap cropcap;
-	struct v4l2_crop crop;
+static gboolean c920_video_device_close(C920VideoDevice *self)
+{
+	if (!C920_IS_VIDEO_DEVICE(self)) return FALSE;
+	
+	size_t i;
+	
+	if (self->priv->fd && close(self->priv->fd) == -1) g_warning("Unable to close device: %s", self->priv->device_name);
+	self->priv->fd = 0;
+	
+	for (i = 0; i < self->priv->num_buffers; i++)
+	{
+		if (munmap(self->priv->buffers[i].data, self->priv->buffers[i].length) == -1)
+		g_warning("Unable to unmap buffer %d on device %s", i, self->priv->device_name);
+        }
+	
+	free(self->priv->buffers);
+	self->priv->buffers = NULL;
+	self->priv->num_buffers = 0;
+
+	return TRUE;
+}
+
+static gboolean c920_video_device_open(C920VideoDevice *self)
+{
+	if (!C920_IS_VIDEO_DEVICE(self)) return FALSE;
+	if (self->priv->fd) c920_video_device_close(self);
+
+	int fd;
+	struct stat st;	
+	struct v4l2_capability cap;
+	const char *device_name = self->priv->device_name;
+	
+	g_debug("Opening video device %s", device_name);
+
+	if (stat(device_name, &st) == -1) 	
+		WARNING_RETURN(FALSE, "Unable to identify device: %s", device_name);
+
+	if (!S_ISCHR(st.st_mode)) 
+		WARNING_RETURN(FALSE, "Not a device: %s", device_name);
+
+	if ((fd = open(device_name, O_RDWR | O_NONBLOCK, 0)) == -1)
+		WARNING_RETURN(FALSE, "Cannot open device: %s", device_name);
+		
+        if (ioctl_ex(fd, VIDIOC_QUERYCAP, &cap) == -1)
+	{
+		close(fd);
+		WARNING_RETURN(FALSE, "Not a valid V4L2 device: %s", device_name);
+	}
+	
+	if (!(cap.capabilities & V4L2_CAP_VIDEO_CAPTURE))
+	{
+		close(fd);
+		WARNING_RETURN(FALSE, "Not a capture device: %s", device_name);
+	}
+	
+	if (!(cap.capabilities & V4L2_CAP_VIDEO_CAPTURE))
+	{
+		close(fd);
+		WARNING_RETURN(FALSE, "Not a streaming device: %s", device_name);
+	}
+
+	self->priv->fd = fd;
+	return TRUE;
+}	
+
+// Set up device stream
+static gboolean c920_video_device_setup_stream(C920VideoDevice *self)
+{
+	if (!C920_IS_VIDEO_DEVICE(self)) return FALSE;
+	
+	int fd = self->priv->fd;
+	const char* device_name = self->priv->device_name;
 	struct v4l2_format fmt;
-	struct v4l2_requestbuffers req;
-	struct v4l2_streamparm parm;
+	struct v4l2_streamparm params;
 	enum   v4l2_buf_type type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
 
-	if (!C920_IS_VIDEO_DEVICE(self)) return FALSE;
-		
-	memset(&cropcap, 0, sizeof(cropcap));
-	memset(&crop, 0, sizeof(crop));
-	memset(&fmt, 0, sizeof(fmt));
-	memset(&req, 0, sizeof(req));
-	memset(&parm, 0, sizeof(parm));
-
-	if (self->priv->started)
-	{
-		g_warning("trying to start a device that has already been started and not yet stopped");
-		return FALSE;
-	}
-
-	g_debug("Trying to set crop rectange for device %s", self->priv->device_name);
-	cropcap.type = type;
-	if (ioctl_ex(self->priv->fd, VIDIOC_CROPCAP, &cropcap) == 0)
-	{
-		crop.type = type;
-		crop.c = cropcap.defrect;
-		if (ioctl_ex(self->priv->fd, VIDIOC_S_CROP, &crop) == -1) g_debug("Unable to set crop for device %s", self->priv->device_name);	
-	}
-	else g_warning("Unable to get crop rectangle for device %s", self->priv->device_name);
+	if (!fd) WARNING_RETURN(FALSE, "Device has not been opened: %s", device_name);
 	
-
-	g_debug("Setting video format to H.264 (w:%d, h:%d) for device %s", self->priv->width, self->priv->height, self->priv->device_name);
+	memset(&fmt, 0, sizeof(fmt));
 	fmt.type = type;
 	fmt.fmt.pix.width = self->priv->width;
 	fmt.fmt.pix.height = self->priv->height;
 	fmt.fmt.pix.pixelformat = v4l2_fourcc('H', '2', '6', '4');
 	fmt.fmt.pix.field = V4L2_FIELD_ANY;
 
-	if (ioctl_ex(self->priv->fd, VIDIOC_S_FMT, &fmt) == -1)
-	{
-		g_warning("error in ioctl VIDIOC_S_FMT");
-		return FALSE;
-	}
-	
-	// in case of buggy driver
-	min = fmt.fmt.pix.width * 2;
-	if (fmt.fmt.pix.bytesperline < min) fmt.fmt.pix.bytesperline = min;
+	if (ioctl_ex(fd, VIDIOC_S_FMT, &fmt) == -1)
+		WARNING_RETURN(FALSE, "Unable to set stream format for device: %s", device_name);
 
-	min = fmt.fmt.pix.bytesperline * fmt.fmt.pix.height;
-	if (fmt.fmt.pix.sizeimage < min) fmt.fmt.pix.sizeimage = min;
+	params.type = type;
+	memset(&params, 0, sizeof(params));
 
-	g_debug("Video size set to: (w:%d, h:%d)", fmt.fmt.pix.width, fmt.fmt.pix.height);
-	g_debug("Video frame size set to: %d", fmt.fmt.pix.sizeimage);
+	if (ioctl_ex(fd, VIDIOC_G_PARM, &params) == -1)
+		WARNING_RETURN(FALSE, "Unable to get stream parameters for device: %s", device_name);
 
+	params.parm.capture.timeperframe.numerator = 1;
+	params.parm.capture.timeperframe.denominator = self->priv->fps;
 
-	g_debug("Getting video stream parameters for device %s", self->priv->device_name);
-	parm.type = type;
-	if (ioctl_ex(self->priv->fd, VIDIOC_G_PARM, &parm) == -1)
-	{
-		g_warning("unable to get stream parameters for %s", self->priv->device_name);
-		return FALSE;
-	}
+	if (ioctl_ex(fd, VIDIOC_S_PARM, &params) == -1)
+		WARNING_RETURN(FALSE, "Unable to set stream parameters for device: %s", device_name);
 
-	g_debug("Time per frame was: %d/%d", parm.parm.capture.timeperframe.numerator, parm.parm.capture.timeperframe.denominator);
-	parm.parm.capture.timeperframe.numerator = 1;
-	parm.parm.capture.timeperframe.denominator = self->priv->fps;
-	g_debug("Time per frame set: %d/%d", parm.parm.capture.timeperframe.numerator, parm.parm.capture.timeperframe.denominator);		
+	return TRUE;		
+}
 
-	if (ioctl_ex(self->priv->fd, VIDIOC_S_PARM, &parm) == -1)
-	{
-		g_warning("unable to set stream parameters for %s", self->priv->device_name);
-		return FALSE;
-	}
-	g_debug("Time per frame now: %d/%d", parm.parm.capture.timeperframe.numerator, parm.parm.capture.timeperframe.denominator);
+// Set up device memory mapping
+static gboolean c920_video_device_memory_map(C920VideoDevice *self)
+{
+	if (!C920_IS_VIDEO_DEVICE(self)) return FALSE;
 
+	int i;
+	struct v4l2_requestbuffers request;
+	int fd = self->priv->fd;
+	void* data;
+	const char* device_name = self->priv->device_name;
+	enum   v4l2_buf_type type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
 
-	g_debug("Initializing MMAP for device %s", self->priv->device_name);
-	req.count = 4;
-	req.type = type;
-	req.memory = V4L2_MEMORY_MMAP;
-		
-	if (ioctl_ex(self->priv->fd,VIDIOC_REQBUFS, &req) == -1)
-	{
-		if (errno == EINVAL) g_warning("%s does not support MMAP", self->priv->device_name);
-		else g_warning("error in ioctl VIDIOC_REQBUFS");
-		return FALSE;
-	}
+	if (!fd) WARNING_RETURN(FALSE, "Device has not been opened: %s", device_name);
 
-	g_debug("Device %s can handle %d memory mapped buffers", self->priv->device_name, req.count);
-	if (req.count < 2) 
-	{
-		g_warning("insufficient memory on device %s", self->priv->device_name);
-		return FALSE;
-	}
-		
-	g_debug("Allocating %d buffers to map", req.count);
-	self->priv->buffers = (struct c920_buffer*) calloc(req.count, sizeof(struct c920_buffer));
-	if (!self->priv->buffers)
-	{
-		g_warning("out of memory");
-		return FALSE;
-	}
-	
-	for (self->priv->num_buffers = 0; self->priv->num_buffers < req.count; self->priv->num_buffers++)
-	{
-		struct v4l2_buffer buf = {0};
-		buf.type = type;
-		buf.memory = V4L2_MEMORY_MMAP;
-		buf.index = self->priv->num_buffers;
-			
-		if (ioctl_ex(self->priv->fd, VIDIOC_QUERYBUF, &buf) == -1)
-		{
-			g_warning("error in ioctl VIDIOC_QUERYBUF");
-			return FALSE;
-		}
+	memset(&request, 0, sizeof(request));
+	request.count = 4;
+	request.type = type;
+	request.memory = V4L2_MEMORY_MMAP;
 
-		g_debug("Mapping buffer %d", self->priv->num_buffers);
-		self->priv->buffers[self->priv->num_buffers].length = buf.length;
-		self->priv->buffers[self->priv->num_buffers].data = mmap(
-			NULL, 
-			buf.length, 
-			PROT_READ | PROT_WRITE,
-			MAP_SHARED,
-			self->priv->fd, buf.m.offset);
+	if (ioctl_ex(fd, VIDIOC_REQBUFS, &request) == -1)
+		WARNING_RETURN(FALSE, "Memory mapping not supported on device: %s", device_name);
 
-		if (self->priv->buffers[self->priv->num_buffers].data == MAP_FAILED)
-		{
-			// todo: facilitate unmap of already mapped buffers
-			g_warning("mmap failed");
-			return FALSE;
-		}
-	}
+	if (request.count < 2)
+		WARNING_RETURN(FALSE, "Insufficient memory on device: %s", device_name);
 
+	if (!(self->priv->buffers = (struct c920_buffer*) calloc(request.count, sizeof(struct c920_buffer))))
+		WARNING_RETURN(FALSE, "Out of memory trying to allocate %d bytes", request.count * sizeof(struct c920_buffer));
 
-	g_debug("Queueing %d buffers for device %s", self->priv->num_buffers, self->priv->device_name);
-	for (i=0; i<self->priv->num_buffers; i++)
+	for (i = 0; i < request.count; i++)
 	{
 		struct v4l2_buffer buf = {0};
 		buf.type = type;
 		buf.memory = V4L2_MEMORY_MMAP;
 		buf.index = i;
 
-		g_debug("Queueing buffer %d", i);
-		if (ioctl_ex(self->priv->fd, VIDIOC_QBUF, &buf) == -1)
-		{
-			// todo: facilitate dequeue
-			g_warning("error in ioctl VIDIOC_QBUF");
-			return FALSE;
-		}
+		if (ioctl_ex(fd, VIDIOC_QUERYBUF, &buf) == -1)
+			WARNING_RETURN(FALSE, "Unable to query buffer %d for device: %s", i, device_name);
+		
+		if ((data = mmap(NULL, buf.length, PROT_READ | PROT_WRITE, MAP_SHARED, fd, buf.m.offset)) == MAP_FAILED)
+			WARNING_RETURN(FALSE, "Unable to map memory for buffer %d on device: %s", i, device_name);
+		
+		self->priv->buffers[self->priv->num_buffers].length = buf.length;
+		self->priv->buffers[self->priv->num_buffers].data = data;
+		self->priv->num_buffers++;
+
+		if (ioctl_ex(fd, VIDIOC_QBUF, &buf) == -1)
+			WARNING_RETURN(FALSE, "Unable to queue buffer %d on device %s", i, device_name);
 	}
+	return TRUE;
+}
+
+gboolean c920_video_device_start(C920VideoDevice *self)
+{
+	if (!C920_IS_VIDEO_DEVICE(self)) return FALSE;
+
+	enum v4l2_buf_type type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
 
 	g_debug("Starting device %s", self->priv->device_name);
-	if (ioctl_ex(self->priv->fd, VIDIOC_STREAMON, &type) == -1)
+
+	c920_video_device_stop(self);
+
+	// open the device
+	if (!c920_video_device_open(self)) 
 	{
-		g_warning("error in ioctl VIDIOC_STREAMON");
 		return FALSE;
 	}
 
-	// attach proc to main loop
+	if (!c920_video_device_setup_stream(self))
+	{
+		c920_video_device_close(self);
+		return FALSE;
+	}
 
-	self->priv->started = TRUE;
+	if (!c920_video_device_memory_map(self))
+	{
+		c920_video_device_close(self);
+		return FALSE;
+	}
+
+	if (ioctl_ex(self->priv->fd, VIDIOC_STREAMON, &type) == -1)
+	{
+		g_warning("Unable to start device: %s", self->priv->device_name);
+		c920_video_device_close(self);
+		return FALSE;
+	}
+
+	g_idle_add_full(100, c920_video_device_process, self, NULL);
+
 	return TRUE;
 }
 
 gboolean c920_video_device_stop(C920VideoDevice *self)
 {
-	size_t i;
-	enum v4l2_buf_type type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
-
 	if (!C920_IS_VIDEO_DEVICE(self)) return FALSE;
 
-	if (!self->priv->started)
-	{
-		g_warning("trying to stop a device that has not started");
-		return FALSE;
-	}
-	self->priv->started = FALSE;
+	enum v4l2_buf_type type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
 
-	g_debug("Stopping device %s", self->priv->device_name);
-	if (ioctl_ex(self->priv->fd, VIDIOC_STREAMOFF, &type) == -1)
+	if (self->priv->fd)
 	{
-        	g_warning("error in ioctl VIDIOC_STREAMOFF");	
-	}
-
-	g_debug("Destroying memory mapped buffers for device %s", self->priv->device_name);
-	for (i=0; i<self->priv->num_buffers; i++)
-	{
-		g_debug("Unmapping buffer %d", i);
-		if (munmap(self->priv->buffers[i].data, self->priv->buffers[i].length) == -1)
+		// should be silently ignored if device already stopped	
+		if (ioctl_ex(self->priv->fd, VIDIOC_STREAMOFF, &type) == -1)
 		{
-			g_warning("Unable to unmap buffer %d", i);
+        		g_warning("Unable to stop device: %s", self->priv->device_name);
 		}
 	}
+	return c920_video_device_close(self);
+}
+
+gboolean c920_video_device_process(gpointer userdata)
+{
+	C920VideoDevice* self = (C920VideoDevice*)userdata;
+	if (!C920_IS_VIDEO_DEVICE(self)) return FALSE;
+
+	fd_set fds;
+	struct timeval tv;
+	struct v4l2_buffer buf = {0};
+	int fd = self->priv->fd;
+	const char* device_name = self->priv->device_name;
+	
+	if (fd == 0) return FALSE;
+
+	FD_ZERO(&fds);
+	FD_SET(fd, &fds);
+	
+	tv.tv_sec = 1;
+	tv.tv_usec = 0;
+
+	// select the device
+	switch (select(fd+1, &fds, NULL, NULL, &tv))
+	{
+		case -1:
+		{
+			if (errno == EINTR) return TRUE;
+			else 
+			{
+				c920_video_device_stop(self);
+				WARNING_RETURN(FALSE, "Unable to select device: %s", device_name);
+			}
+		}
+		case 0:
+		{
+			c920_video_device_stop(self);
+			WARNING_RETURN(FALSE, "Timeout occurred while selecting device: %s", device_name);
+		}
+	}
+	
+	// dequeue a buffer
+	buf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+	buf.memory = V4L2_MEMORY_MMAP;
+	if (ioctl_ex(fd, VIDIOC_DQBUF, &buf) == -1)
+	{
+		if (errno == EAGAIN) return TRUE;
+		else 
+		{
+			c920_video_device_stop(self);
+			WARNING_RETURN(FALSE, "Error while trying to dequeue buffer for device: %s", device_name);
+		}
+	}
+	if (buf.index >= self->priv->num_buffers)
+	{
+		c920_video_device_stop(self);
+		WARNING_RETURN(FALSE, "Invalid buffer index for device: %s", device_name);
+	}
+
+	//if (_process_cb) _process_cb(_buffers[buffer.index].data, buffer.bytesused, _userdata);
+
+	// queue the buffer again
+	if (ioctl_ex(fd, VIDIOC_QBUF, &buf) == -1)
+	{
+		c920_video_device_stop(self);
+		WARNING_RETURN(FALSE, "Unable to queue buffer for device: %s", device_name);
+	}
+
 	return TRUE;
 }

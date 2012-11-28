@@ -4,7 +4,6 @@
 #include "c920_global.h"
 #include "c920_video_device.h"
 
-
 #define C920_TYPE_DEVICE_MANAGER \
 	(c920_device_manager_get_type())
 

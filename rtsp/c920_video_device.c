@@ -1,12 +1,9 @@
 #include "c920_video_device.h"
 
-#define C920_VIDEO_DEVICE_GET_PRIVATE(obj) \
-	(G_TYPE_INSTANCE_GET_PRIVATE((obj), C920_TYPE_VIDEO_DEVICE, C920VideoDevicePrivate))
-
-
 G_DEFINE_TYPE(C920VideoDevice, c920_video_device, G_TYPE_OBJECT);
 
-
+#define C920_VIDEO_DEVICE_GET_PRIVATE(obj) \
+	(G_TYPE_INSTANCE_GET_PRIVATE((obj), C920_TYPE_VIDEO_DEVICE, C920VideoDevicePrivate))
 enum 
 {
 	PROP_0,
@@ -42,7 +39,6 @@ struct _C920VideoDevicePrivate
 	
 	// device io
 	int fd;
-	gboolean started;
 	struct c920_buffer *buffers;
 	size_t num_buffers;
 	FILE *dump_file;
@@ -50,7 +46,7 @@ struct _C920VideoDevicePrivate
 	int start_count;
 };
 
-
+/* Forward Declarations */
 static void c920_video_device_class_init(C920VideoDeviceClass*);
 static void c920_video_device_init(C920VideoDevice*);
 static void c920_video_device_get_property(GObject*, guint, GValue*, GParamSpec*);
@@ -58,14 +54,22 @@ static void c920_video_device_set_property(GObject*, guint, const GValue*, GPara
 static void c920_video_device_dispose(GObject*);
 static void c920_video_device_finalize(GObject*);
 
+/* Constructor only property setters */
 static void c920_video_device_set_device_name(C920VideoDevice*, const gchar*);
 static void c920_video_device_set_width(C920VideoDevice*, guint);
 static void c920_video_device_set_height(C920VideoDevice*, guint);
 static void c920_video_device_set_fps(C920VideoDevice*, guint);
 
+/* Main loop process function */
 static gboolean c920_video_device_process(gpointer userdata);
-static gboolean c920_video_device_equal_func(gconstpointer, gconstpointer);
 
+/* Equals function for hashtable */
+static gboolean g_pointer_equals(gconstpointer a, gconstpointer b)
+{
+	return a == b;
+}
+
+/* IOCTL function for device IO */
 static int ioctl_ex(int fh, int request, void* arg)
 {
 	int r;
@@ -73,6 +77,11 @@ static int ioctl_ex(int fh, int request, void* arg)
 	return r;
 }
 
+
+/* C920 Video Device Class Initializer
+ * -----------------------------------
+ * Set property declarations
+ */
 static void c920_video_device_class_init(C920VideoDeviceClass *cls)
 {
 	GObjectClass *base = G_OBJECT_CLASS(cls);
@@ -126,17 +135,22 @@ static void c920_video_device_class_init(C920VideoDeviceClass *cls)
 	g_type_class_add_private(cls, sizeof(C920VideoDevicePrivate));
 }
 
-static gboolean c920_video_device_equal_func(gconstpointer a, gconstpointer b) 
-{
-	return a == b;
-}
 
+/* C920 Video Device Instance Initializer
+ * --------------------------------------
+ * Initialize the hashtable
+ */
 static void c920_video_device_init(C920VideoDevice *self)
 {
 	self->priv = C920_VIDEO_DEVICE_GET_PRIVATE(self);
-	self->priv->hashtable = g_hash_table_new_full(g_direct_hash, c920_video_device_equal_func, NULL, g_free);
+	self->priv->hashtable = g_hash_table_new_full(g_direct_hash, g_pointer_equals, NULL, g_free);
 }
 
+
+/* C920 Video Device Property Getter
+ * ---------------------------------
+ * Get the device-name, width, height, fps and dump-file-name
+ */
 static void c920_video_device_get_property(GObject* obj, guint pidx, GValue* value, GParamSpec* spec)
 {
 	C920VideoDevice *self = C920_VIDEO_DEVICE(obj);
@@ -169,6 +183,13 @@ static void c920_video_device_get_property(GObject* obj, guint pidx, GValue* val
 	}
 }
 
+
+/* C920 Video Device Property Setter
+ * ---------------------------------
+ * Set from constructor only: device-name, width, height, fps
+ * Set from anywhere: file-dump-name.
+ * The file dump name can be changed during operation, so that the dump can be split
+ */
 static void c920_video_device_set_property(GObject *obj, guint pidx, const GValue *value, GParamSpec *spec)
 {
 	C920VideoDevice *self = C920_VIDEO_DEVICE(obj);
@@ -201,24 +222,43 @@ static void c920_video_device_set_property(GObject *obj, guint pidx, const GValu
 	}
 }
 
+
+/* C920 Video Device Dispose
+ * -------------------------
+ * Destroy the hashtable
+ */
 static void c920_video_device_dispose(GObject *obj)
 {
 	C920VideoDevice *self = C920_VIDEO_DEVICE(obj);
+
+	if (self->priv->dump_file)
+        {
+                g_mutex_lock(&mutex);
+                fclose(self->priv->dump_file);
+                self->priv->dump_file = NULL;
+                g_mutex_unlock(&mutex);
+        }
+
 	g_hash_table_destroy(self->priv->hashtable);
 	G_OBJECT_CLASS(c920_video_device_parent_class)->dispose(obj);
 }
 
+
+/* C920 Video Device Finalize
+ * --------------------------
+ * Free the device name and the dump file name
+ * Also close the dump file*/
 static void c920_video_device_finalize(GObject *obj)
 {
 	C920VideoDevice *self = C920_VIDEO_DEVICE(obj);
 	g_free(self->priv->device_name);
-	g_free(self->priv->dump_file_name);	
+	g_free(self->priv->dump_file_name);
+	
 	G_OBJECT_CLASS(c920_video_device_parent_class)->finalize(obj);
 }
 
 
-// PROPERTIES
-
+/* Property Setters / Getters */
 static void c920_video_device_set_width(C920VideoDevice *self, guint width)
 {
 	g_return_if_fail(C920_IS_VIDEO_DEVICE(self));
@@ -267,8 +307,12 @@ void c920_video_device_set_dump_file_name(C920VideoDevice *self, const gchar *na
 
 	g_free(self->priv->dump_file_name);
 	self->priv->dump_file_name = g_strdup(name);
+
+	g_mutex_lock(&mutex);
 	if (self->priv->dump_file) fclose(self->priv->dump_file);
 	if (name) self->priv->dump_file = fopen(name, "wb");
+	else self->priv->dump_file = NULL;
+	g_mutex_unlock (&mutex);
 }
 
 const gchar* c920_video_device_get_dump_file_name(C920VideoDevice *self)
@@ -277,6 +321,12 @@ const gchar* c920_video_device_get_dump_file_name(C920VideoDevice *self)
 	return self->priv->dump_file_name;
 }
 
+
+/* C920 Video Device - Add Callback
+ * --------------------------------
+ * Add a C920VideoBufferFunc callback to the frame capture process.
+ * userdata will be used as the key in the hashtable, so make it unique
+ */
 void c920_video_device_add_callback(C920VideoDevice *self, C920VideoBufferFunc callback, gpointer userdata)
 {
 	g_return_if_fail(C920_IS_VIDEO_DEVICE(self));
@@ -288,12 +338,18 @@ void c920_video_device_add_callback(C920VideoDevice *self, C920VideoBufferFunc c
 	g_hash_table_insert(self->priv->hashtable, userdata, cb);
 }
 
+
+/* C920 Video Device - Remove Callback
+ * -----------------------------------
+ * Remove a callback by the userdata passed in the add function
+ */
 void c920_video_device_remove_callback_by_data(C920VideoDevice *self, gpointer userdata)
 {
 	g_return_if_fail(C920_IS_VIDEO_DEVICE(self));
 	g_hash_table_remove(self->priv->hashtable, userdata);
 }
 
+/* Set the device name, constructor only */
 static void c920_video_device_set_device_name(C920VideoDevice *self, const gchar* device_name)
 {
 	g_return_if_fail(C920_IS_VIDEO_DEVICE(self));
@@ -303,6 +359,7 @@ static void c920_video_device_set_device_name(C920VideoDevice *self, const gchar
 	self->priv->device_name = g_strdup(device_name);
 }
 
+/* Get the device name */
 const gchar* c920_video_device_get_device_name(C920VideoDevice *self)
 {
 	if (!C920_IS_VIDEO_DEVICE(self)) return NULL;
@@ -310,8 +367,12 @@ const gchar* c920_video_device_get_device_name(C920VideoDevice *self)
 }
 
 
-// DEVICE IO
+/* DEVICE IO */
 
+/* C920 Video Device - Close
+ * -------------------------
+ * Close the device and unmap memory
+ */
 static gboolean c920_video_device_close(C920VideoDevice *self)
 {
 	if (!C920_IS_VIDEO_DEVICE(self)) return FALSE;
@@ -334,6 +395,10 @@ static gboolean c920_video_device_close(C920VideoDevice *self)
 	return TRUE;
 }
 
+/* C920 Video Device - Open
+ * ------------------------
+ * Open a handle to the device
+ */
 static gboolean c920_video_device_open(C920VideoDevice *self)
 {
 	if (!C920_IS_VIDEO_DEVICE(self)) return FALSE;
@@ -377,7 +442,10 @@ static gboolean c920_video_device_open(C920VideoDevice *self)
 	return TRUE;
 }	
 
-// Set up device stream
+/* C920 Video Device - Setup
+ * -------------------------
+ * Set up the stream parameters like width, height and fps
+ */
 static gboolean c920_video_device_setup_stream(C920VideoDevice *self)
 {
 	if (!C920_IS_VIDEO_DEVICE(self)) return FALSE;
@@ -415,7 +483,10 @@ static gboolean c920_video_device_setup_stream(C920VideoDevice *self)
 	return TRUE;		
 }
 
-// Set up device memory mapping
+/* C920 Video Device - Memory
+ * --------------------------
+ * Set up memory mapping for the device
+ */
 static gboolean c920_video_device_memory_map(C920VideoDevice *self)
 {
 	if (!C920_IS_VIDEO_DEVICE(self)) return FALSE;
@@ -466,6 +537,14 @@ static gboolean c920_video_device_memory_map(C920VideoDevice *self)
 	return TRUE;
 }
 
+
+/* C920 Video Device - Start
+ * -------------------------
+ * Start the device. If the device is already started, do nothing and increment
+ * the start_count. When stop is called it will decrement this value, so that
+ * multiple references to the device can be obtained, and as long as one reference
+ * has started and not stopped, the device keeps streaming
+ */
 gboolean c920_video_device_start(C920VideoDevice *self)
 {
 	if (!C920_IS_VIDEO_DEVICE(self)) return FALSE;
@@ -479,8 +558,6 @@ gboolean c920_video_device_start(C920VideoDevice *self)
 	}
 
 	g_debug("Starting device %s", self->priv->device_name);
-
-	c920_video_device_stop(self);
 
 	// open the device
 	if (!c920_video_device_open(self)) 
@@ -514,6 +591,13 @@ gboolean c920_video_device_start(C920VideoDevice *self)
 	return TRUE;
 }
 
+
+/* C920 Video Device - Stop
+ * ------------------------
+ * Stop the device, once the start_count hits 0
+ * Other instances may hold a ref to the video and have started it but not stopped it
+ * in which case we want to continue streaming
+ */
 gboolean c920_video_device_stop(C920VideoDevice *self)
 {
 	if (!C920_IS_VIDEO_DEVICE(self)) return FALSE;
@@ -539,9 +623,15 @@ gboolean c920_video_device_stop(C920VideoDevice *self)
 	return c920_video_device_close(self);
 }
 
+
+/* C920 Video Device - Process
+ * ---------------------------
+ * This function is attached to the main loop and will run on idle (high prio idle)
+ * It will try to dequeue a buffer and send it to all the callbacks in the hashtable
+ */
 gboolean c920_video_device_process(gpointer userdata)
 {
-	C920VideoDevice* self = (C920VideoDevice*)userdata;
+	C920VideoDevice *self = (C920VideoDevice*)userdata;
 	if (!C920_IS_VIDEO_DEVICE(self)) return FALSE;
 
 	fd_set fds;
@@ -595,14 +685,15 @@ gboolean c920_video_device_process(gpointer userdata)
 		WARNING_RETURN(FALSE, "Invalid buffer index for device: %s", device_name);
 	}
 
+	g_mutex_lock(&mutex);
 	if (self->priv->dump_file)
 	{
 		fwrite(self->priv->buffers[buf.index].data, 1, buf.bytesused, self->priv->dump_file);
 		fflush(self->priv->dump_file);
 	}
+	g_mutex_unlock(&mutex);
 
 	
-	//if (self->priv->cb) self->priv->cb(self->priv->buffers[buf.index].data, buf.bytesused, self->priv->cb_userdata);
 	GList *list = g_hash_table_get_values(self->priv->hashtable); 
 	GList *node = list;
 
@@ -613,8 +704,6 @@ gboolean c920_video_device_process(gpointer userdata)
 	} while ((node = node->next));
 
 	g_list_free(list);
-
-	//if (_process_cb) _process_cb(_buffers[buffer.index].data, buffer.bytesused, _userdata);
 
 	// queue the buffer again
 	if (ioctl_ex(fd, VIDIOC_QBUF, &buf) == -1)

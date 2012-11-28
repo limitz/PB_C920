@@ -1,59 +1,74 @@
 #include "c920_rtsp_media_factory.h"
 
+G_DEFINE_TYPE(C920RtspMediaFactory, c920_rtsp_media_factory, GST_TYPE_RTSP_MEDIA_FACTORY);
+
 #define C920_RTSP_MEDIA_FACTORY_GET_PRIVATE(obj) \
 	(G_TYPE_INSTANCE_GET_PRIVATE((obj), C920_TYPE_RTSP_MEDIA_FACTORY, C920RtspMediaFactoryPrivate))
 
-
-G_DEFINE_TYPE(C920RtspMediaFactory, c920_rtsp_media_factory, GST_TYPE_RTSP_MEDIA_FACTORY);
-
-
 struct _C920RtspMediaFactoryPrivate
 {
-	C920LiveSrc* live_src;
+	C920LiveSrc *live_src;
 };
 
+/* Forward declarations */
 static void c920_rtsp_media_factory_class_init(C920RtspMediaFactoryClass*);
 static void c920_rtsp_media_factory_init(C920RtspMediaFactory*);
 static void c920_rtsp_media_factory_dispose(GObject*);
 static void c920_rtsp_media_factory_finalize(GObject*);
 
-static GstRTSPMedia* 	c920_rtsp_media_factory_real_construct(GstRTSPMediaFactory*, const GstRTSPUrl*);
-static GstElement*   	c920_rtsp_media_factory_real_create_pipeline(GstRTSPMediaFactory*, GstRTSPMedia*);
-static void		c920_rtsp_media_factory_real_configure(GstRTSPMediaFactory*, GstRTSPMedia*);
-static GstElement*	c920_rtsp_media_factory_real_get_element(GstRTSPMediaFactory*, const GstRTSPUrl*);
-static gchar*		c920_rtsp_media_factory_real_gen_key(GstRTSPMediaFactory*, const GstRTSPUrl*);
+/* GstRTSPMediaFactory overloads */
+static GstElement* c920_rtsp_media_factory_real_get_element(GstRTSPMediaFactory*, const GstRTSPUrl*);
 
-static gboolean		c920_rtsp_media_factory_bus_watch(GstBus*, GstMessage*, gpointer);
+/* Utility functions */
+static gboolean	c920_rtsp_media_factory_bus_watch(GstBus*, GstMessage*, gpointer);
 
+
+/* C920 RTSP Media Factory Class Initializer 
+ * -----------------------------------------
+ * Overload the GstRTSPMediaFactory protected functions
+ */
 static void c920_rtsp_media_factory_class_init(C920RtspMediaFactoryClass *cls)
 {
-	GstRTSPMediaFactoryClass* base = GST_RTSP_MEDIA_FACTORY_CLASS(cls);
+	GObjectClass *object_class = G_OBJECT_CLASS(cls);
+	GstRTSPMediaFactoryClass *base_class = GST_RTSP_MEDIA_FACTORY_CLASS(cls);
 
-	base->construct 	= c920_rtsp_media_factory_real_construct;
-	base->create_pipeline 	= c920_rtsp_media_factory_real_create_pipeline;
-	base->configure		= c920_rtsp_media_factory_real_configure;
-	base->get_element	= c920_rtsp_media_factory_real_get_element;
-	base->gen_key		= c920_rtsp_media_factory_real_gen_key;
+	base_class->get_element     = c920_rtsp_media_factory_real_get_element;
 
-	G_OBJECT_CLASS(cls)->dispose = c920_rtsp_media_factory_dispose;
-	G_OBJECT_CLASS(cls)->finalize = c920_rtsp_media_factory_finalize;
+	object_class->dispose       = c920_rtsp_media_factory_dispose;
+	object_class->finalize      = c920_rtsp_media_factory_finalize;
 
 	g_type_class_add_private(cls, sizeof(C920RtspMediaFactoryPrivate));
 }
 
+
+/* C920 RTSP Media Factory Instance Initializer
+ * --------------------------------------------
+ * Sets the media factory to shared
+ */
 static void c920_rtsp_media_factory_init(C920RtspMediaFactory *self)
 {
 	self->priv = C920_RTSP_MEDIA_FACTORY_GET_PRIVATE(self);
 	gst_rtsp_media_factory_set_shared(GST_RTSP_MEDIA_FACTORY(self), TRUE);
 }
 
+
+/* C920 RTSP Media Factory Instance Dispose
+ * ----------------------------------------
+ * Unref the live source?
+ */
 static void c920_rtsp_media_factory_dispose(GObject *obj)
 {
 	C920RtspMediaFactory *self __unused = C920_RTSP_MEDIA_FACTORY(obj);
+	// todo, check if this isn't already unreffed with the pipeline
 	g_object_unref(self->priv->live_src);
 	G_OBJECT_CLASS(c920_rtsp_media_factory_parent_class)->dispose(obj);
 }
 
+
+/* C920 RTSP Media Factory Instance Finalize
+ * -----------------------------------------
+ * Nothing to do for now
+ */
 static void c920_rtsp_media_factory_finalize(GObject *obj)
 {
 	C920RtspMediaFactory *self __unused = C920_RTSP_MEDIA_FACTORY(obj);
@@ -61,33 +76,19 @@ static void c920_rtsp_media_factory_finalize(GObject *obj)
 	G_OBJECT_CLASS(c920_rtsp_media_factory_parent_class)->finalize(obj);
 }
 
-static GstRTSPMedia* c920_rtsp_media_factory_real_construct(GstRTSPMediaFactory *base, const GstRTSPUrl *url)
-{
-	// todo: add own logic
-	return GST_RTSP_MEDIA_FACTORY_CLASS(c920_rtsp_media_factory_parent_class)->construct(base, url);
-}
 
-static GstElement* c920_rtsp_media_factory_real_create_pipeline(GstRTSPMediaFactory *base, GstRTSPMedia *media)
-{
-	// todo: add own logic
-	return GST_RTSP_MEDIA_FACTORY_CLASS(c920_rtsp_media_factory_parent_class)->create_pipeline(base, media);
-}
-
-static void c920_rtsp_media_factory_real_configure(GstRTSPMediaFactory *base, GstRTSPMedia *media)
-{
-	// todo: add own logic
-	return GST_RTSP_MEDIA_FACTORY_CLASS(c920_rtsp_media_factory_parent_class)->configure(base, media);
-}
-
+/* C920 RTSP Media Factory - Get Element
+ * -------------------------------------
+ * Create a pipeline with a live source streaming H.264 into a RTP payloader
+ */
 static GstElement* c920_rtsp_media_factory_real_get_element(GstRTSPMediaFactory *base, const GstRTSPUrl *url)
 {
-	// Create a live src
 	if (!C920_IS_RTSP_MEDIA_FACTORY(base)) return NULL;
 	
 	GstElement *pipeline, *h264parse, *rtph264pay, *live_src;
 	GstBus *bus;
 	gchar *device_name;
-	C920RtspMediaFactory* self = C920_RTSP_MEDIA_FACTORY(base);
+	C920RtspMediaFactory *self = C920_RTSP_MEDIA_FACTORY(base);
 
 	if (!(pipeline = gst_pipeline_new("c920_stream")))
 		WARNING_RETURN(NULL, "Unable to create pipeline");
@@ -140,11 +141,6 @@ static GstElement* c920_rtsp_media_factory_real_get_element(GstRTSPMediaFactory 
 	//return GST_RTSP_MEDIA_FACTORY_CLASS(c920_rtsp_media_factory_parent_class)->get_element(base, url);
 }
 
-static gchar* c920_rtsp_media_factory_real_gen_key(GstRTSPMediaFactory *base, const GstRTSPUrl *url)
-{
-	// todo: add own logid
-	return GST_RTSP_MEDIA_FACTORY_CLASS(c920_rtsp_media_factory_parent_class)->gen_key(base, url);
-}
 
 static gboolean	c920_rtsp_media_factory_bus_watch(GstBus *bus, GstMessage *msg, gpointer userdata)
 {
@@ -152,8 +148,23 @@ static gboolean	c920_rtsp_media_factory_bus_watch(GstBus *bus, GstMessage *msg, 
 
 	switch (GST_MESSAGE_TYPE(msg))
 	{
-		case GST_MESSAGE_EOS: break;
-		case GST_MESSAGE_ERROR: break;
+		case GST_MESSAGE_EOS: 
+		{
+			g_print("Bus message: EOS\n");
+			break;
+		}
+		case GST_MESSAGE_ERROR:
+		{ 
+			GError *err = NULL;
+			gchar *dbg_info = NULL;
+
+			gst_message_parse_error (msg, &err, &dbg_info);
+			g_printerr ("ERROR from element %s: %s\n", GST_OBJECT_NAME (msg->src), err->message);
+			g_printerr ("Debugging info: %s\n", (dbg_info) ? dbg_info : "none");
+			g_error_free (err);
+			g_free (dbg_info);
+			break;
+		}
 		default: break;
 	}
 	return TRUE;

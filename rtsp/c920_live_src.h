@@ -37,7 +37,10 @@ struct _C920LiveSrcClass
 	GstAppSrcClass parent_class;
 };
 
-GType c920_live_src_get_type();
+GType 
+c920_live_src_get_type();
 
+gboolean
+c920_live_src_validate();
 
 #endif

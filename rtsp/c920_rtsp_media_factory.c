@@ -60,7 +60,7 @@ static void c920_rtsp_media_factory_dispose(GObject *obj)
 {
 	C920RtspMediaFactory *self __unused = C920_RTSP_MEDIA_FACTORY(obj);
 	// todo, check if this isn't already unreffed with the pipeline
-	g_object_unref(self->priv->live_src);
+	//g_object_unref(self->priv->live_src);
 	G_OBJECT_CLASS(c920_rtsp_media_factory_parent_class)->dispose(obj);
 }
 
@@ -85,7 +85,7 @@ static GstElement* c920_rtsp_media_factory_real_get_element(GstRTSPMediaFactory 
 {
 	if (!C920_IS_RTSP_MEDIA_FACTORY(base)) return NULL;
 	
-	GstElement *pipeline, *h264parse, *rtph264pay, *live_src;
+	GstElement *pipeline, *h264parse, *rtph264pay, *queue, *live_src;
 	GstBus *bus;
 	gchar *device_name;
 	C920RtspMediaFactory *self = C920_RTSP_MEDIA_FACTORY(base);
@@ -99,10 +99,18 @@ static GstElement* c920_rtsp_media_factory_real_get_element(GstRTSPMediaFactory 
 		WARNING_RETURN(NULL, "Unable to create element h264parse");
 	}
 
+	if (!(queue = gst_element_factory_make("queue", "queue")))
+	{
+		gst_object_unref(pipeline);
+		gst_object_unref(queue);
+		WARNING_RETURN(NULL, "Unable to create element queue");
+	}
+
 	if (!(rtph264pay = gst_element_factory_make("rtph264pay", "pay0")))
 	{
 		gst_object_unref(pipeline);
 		gst_object_unref(h264parse);
+		gst_object_unref(queue);
 		WARNING_RETURN(NULL, "Unable to create element rtph264pay");
 	}
 
@@ -116,13 +124,16 @@ static GstElement* c920_rtsp_media_factory_real_get_element(GstRTSPMediaFactory 
 
 	g_free(device_name);	
 	
-	if (!live_src)
+	if (!live_src || !c920_live_src_validate(live_src))
 	{
 		gst_object_unref(pipeline);
 		gst_object_unref(h264parse);
+		gst_object_unref(queue);
 		gst_object_unref(rtph264pay);
 		WARNING_RETURN(NULL, "Unable to create live source");
 	}
+
+	self->priv->live_src = C920_LIVE_SRC(live_src);
 
 	g_object_set(G_OBJECT(rtph264pay), "pt", 96, NULL);
 	
@@ -133,8 +144,8 @@ static GstElement* c920_rtsp_media_factory_real_get_element(GstRTSPMediaFactory 
 	}
 	else g_warning("Unable to get a bus for the pipeline");
 
-	gst_bin_add_many(GST_BIN(pipeline), GST_ELEMENT(self->priv->live_src), h264parse, rtph264pay, NULL);
-	gst_element_link_many(GST_ELEMENT(self->priv->live_src), h264parse, rtph264pay, NULL);
+	gst_bin_add_many(GST_BIN(pipeline), GST_ELEMENT(self->priv->live_src), h264parse, queue, rtph264pay, NULL);
+	gst_element_link_many(GST_ELEMENT(self->priv->live_src), h264parse, queue, rtph264pay, NULL);
 
 	return GST_ELEMENT(pipeline);
 
@@ -165,7 +176,9 @@ static gboolean	c920_rtsp_media_factory_bus_watch(GstBus *bus, GstMessage *msg, 
 			g_free (dbg_info);
 			break;
 		}
-		default: break;
+		default: 
+			g_print("%d\n",GST_MESSAGE_TYPE(msg));
+			break;
 	}
 	return TRUE;
 }

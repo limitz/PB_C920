@@ -78,10 +78,10 @@ static void c920_live_src_init(C920LiveSrc *self)
 	self->priv->cb.enough_data = c920_live_src_enough_data;
 	self->priv->cb.seek_data = NULL;
 
-	gst_app_src_set_latency(base, -1, 1000);
+	gst_app_src_set_latency(base, 100, 1000);
 	gst_app_src_set_size(base, -1);
 	gst_app_src_set_stream_type(base, GST_APP_STREAM_TYPE_STREAM);
-	gst_app_src_set_max_bytes(base, 20 * 1024 * 1024);
+	gst_app_src_set_max_bytes(base, 2 * 1024 * 1024);
 	gst_app_src_set_callbacks(base, &self->priv->cb, NULL, NULL);
 }
 
@@ -138,8 +138,8 @@ static void c920_live_src_dispose(GObject *obj)
 	gst_caps_unref(self->priv->caps);
 	if (self->priv->device)
 	{
-		c920_video_device_remove_callback_by_data(self->priv->device, self);
 		c920_video_device_stop(self->priv->device);
+		c920_video_device_remove_callback_by_data(self->priv->device, self);
 		g_object_unref(self->priv->device);
 	}
 	G_OBJECT_CLASS(c920_live_src_parent_class)->dispose(obj);
@@ -178,12 +178,12 @@ static void c920_live_src_set_device_name(C920LiveSrc *self, const gchar *device
 		g_object_unref(instance);
 
 		self->priv->caps = gst_caps_new_simple(
-			"video/x-h264",
+			"video/x-raw",
 			"width", G_TYPE_INT, c920_video_device_get_width(self->priv->device),
 			"height", G_TYPE_INT, c920_video_device_get_height(self->priv->device),
 			"framerate", GST_TYPE_FRACTION, c920_video_device_get_fps(self->priv->device), 1,
 			NULL);
-		gst_app_src_set_caps(GST_APP_SRC(self), self->priv->caps);
+		//gst_app_src_set_caps(GST_APP_SRC(self), self->priv->caps);
 	}
 }
 
@@ -207,13 +207,11 @@ static void c920_live_src_handle_buffer(gconstpointer data, guint length, gpoint
 	g_return_if_fail(C920_IS_LIVE_SRC(userdata));
 
 	C920LiveSrc *self = C920_LIVE_SRC(userdata);
-
 	if (!self->priv->queue_full)
 	{
 		GstBuffer *buffer = gst_buffer_new();
 		if (buffer)
 		{
-			// todo: do we need to copy data? i think yes
 			buffer->size = length;
 			buffer->malloc_data = buffer->data = g_malloc(length);
 			memcpy(buffer->malloc_data, data, length);
@@ -233,6 +231,7 @@ static void c920_live_src_need_data(GstAppSrc *appsrc, guint length, gpointer us
 
 	C920LiveSrc *self = C920_LIVE_SRC(appsrc);
 	self->priv->queue_full = FALSE;
+	//g_print("NEED DATA\n");
 }
 
 
@@ -244,5 +243,6 @@ static void c920_live_src_enough_data(GstAppSrc *appsrc, gpointer userdata)
 {
 	g_return_if_fail(C920_IS_LIVE_SRC(appsrc));
 	C920LiveSrc *self = C920_LIVE_SRC(appsrc);
+	g_print("BUFFER FULL\n");
 	self->priv->queue_full = TRUE;
 }

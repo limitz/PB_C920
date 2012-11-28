@@ -44,6 +44,7 @@ struct _C920VideoDevicePrivate
 	FILE *dump_file;
 
 	int start_count;
+	GThread *thread;
 };
 
 /* Forward Declarations */
@@ -61,7 +62,7 @@ static void c920_video_device_set_height(C920VideoDevice*, guint);
 static void c920_video_device_set_fps(C920VideoDevice*, guint);
 
 /* Main loop process function */
-static gboolean c920_video_device_process(gpointer userdata);
+static gpointer c920_video_device_process(gpointer userdata);
 
 /* Equals function for hashtable */
 static gboolean g_pointer_equals(gconstpointer a, gconstpointer b)
@@ -330,12 +331,13 @@ const gchar* c920_video_device_get_dump_file_name(C920VideoDevice *self)
 void c920_video_device_add_callback(C920VideoDevice *self, C920VideoBufferFunc callback, gpointer userdata)
 {
 	g_return_if_fail(C920_IS_VIDEO_DEVICE(self));
-
+	
+	g_mutex_lock(&mutex);
 	struct c920_callback *cb = g_malloc(sizeof(struct c920_callback));
 	cb->cb = callback;
 	cb->userdata = userdata;
-
 	g_hash_table_insert(self->priv->hashtable, userdata, cb);
+	g_mutex_unlock(&mutex);
 }
 
 
@@ -346,7 +348,9 @@ void c920_video_device_add_callback(C920VideoDevice *self, C920VideoBufferFunc c
 void c920_video_device_remove_callback_by_data(C920VideoDevice *self, gpointer userdata)
 {
 	g_return_if_fail(C920_IS_VIDEO_DEVICE(self));
+	g_mutex_lock(&mutex);
 	g_hash_table_remove(self->priv->hashtable, userdata);
+	g_mutex_unlock(&mutex);
 }
 
 /* Set the device name, constructor only */
@@ -549,7 +553,8 @@ gboolean c920_video_device_start(C920VideoDevice *self)
 {
 	if (!C920_IS_VIDEO_DEVICE(self)) return FALSE;
 	enum v4l2_buf_type type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
-	
+
+	g_print("Starting device\n");	
 	g_mutex_lock(&mutex);
 	if (self->priv->start_count)
 	{
@@ -584,10 +589,14 @@ gboolean c920_video_device_start(C920VideoDevice *self)
 		return FALSE;
 	}
 
-	g_idle_add_full(100, c920_video_device_process, self, NULL);
+	//g_idle_add_full(100, c920_video_device_process, self, NULL);
 
 	self->priv->start_count++;
-	g_mutex_unlock(&mutex);
+	g_mutex_unlock(&mutex);	
+	g_print("Started Video Device\n");
+	
+	self->priv->thread = g_thread_new("video device process", c920_video_device_process, self);
+
 	return TRUE;
 }
 
@@ -603,13 +612,21 @@ gboolean c920_video_device_stop(C920VideoDevice *self)
 	if (!C920_IS_VIDEO_DEVICE(self)) return FALSE;
 	enum v4l2_buf_type type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
 
+	g_print("Stopping Video Device\n");
 	g_mutex_lock(&mutex);
-	if (--self->priv->start_count) 
+	if (self->priv->start_count != 1) 
 	{
+		self->priv->start_count--;
 		g_mutex_unlock(&mutex);
 		return TRUE;
 	}
 
+	self->priv->start_count = 0;
+	g_mutex_unlock(&mutex);
+	
+	g_thread_join(self->priv->thread);
+	g_print("Stopped Device\n");
+	
 	if (self->priv->fd)
 	{
 		// should be silently ignored if device already stopped	
@@ -619,7 +636,6 @@ gboolean c920_video_device_stop(C920VideoDevice *self)
 		}
 	}
 
-	g_mutex_unlock(&mutex);
 	return c920_video_device_close(self);
 }
 
@@ -629,10 +645,10 @@ gboolean c920_video_device_stop(C920VideoDevice *self)
  * This function is attached to the main loop and will run on idle (high prio idle)
  * It will try to dequeue a buffer and send it to all the callbacks in the hashtable
  */
-gboolean c920_video_device_process(gpointer userdata)
+gpointer c920_video_device_process(gpointer userdata)
 {
 	C920VideoDevice *self = (C920VideoDevice*)userdata;
-	if (!C920_IS_VIDEO_DEVICE(self)) return FALSE;
+	if (!C920_IS_VIDEO_DEVICE(self)) return NULL;
 
 	fd_set fds;
 	struct timeval tv;
@@ -640,77 +656,94 @@ gboolean c920_video_device_process(gpointer userdata)
 	int fd = self->priv->fd;
 	const char* device_name = self->priv->device_name;
 	
-	if (fd == 0) return FALSE;
-
 	FD_ZERO(&fds);
 	FD_SET(fd, &fds);
 	
-	tv.tv_sec = 1;
-	tv.tv_usec = 0;
-
-	// select the device
-	switch (select(fd+1, &fds, NULL, NULL, &tv))
+	while (TRUE)
 	{
-		case -1:
+		usleep(5000);
+		g_mutex_lock(&mutex);
+		if (!C920_IS_VIDEO_DEVICE(self)) 
 		{
-			if (errno == EINTR) return TRUE;
-			else 
+			g_mutex_unlock(&mutex);
+			return NULL;
+		}
+		if (!self->priv->start_count) 
+		{
+			g_mutex_unlock(&mutex);
+			return NULL;
+		}
+
+		tv.tv_sec = 1;
+		tv.tv_usec = 0;
+		// select the device
+		switch (select(fd+1, &fds, NULL, NULL, &tv))
+		{
+			case -1:
 			{
-				c920_video_device_stop(self);
-				WARNING_RETURN(FALSE, "Unable to select device: %s", device_name);
+				if (errno == EINTR) 
+				{	
+					g_mutex_unlock(&mutex);	
+					continue;
+				}
+				else 
+				{
+					g_warning("Unable to select device: %s", device_name);
+					g_mutex_unlock(&mutex); usleep(1000000); continue;
+				}
+			}
+			case 0:
+			{
+				g_warning("Timeout occurred while selecting device: %s", device_name);
+				g_mutex_unlock(&mutex); usleep(1000000); continue;
 			}
 		}
-		case 0:
-		{
-			c920_video_device_stop(self);
-			WARNING_RETURN(FALSE, "Timeout occurred while selecting device: %s", device_name);
-		}
-	}
 	
-	// dequeue a buffer
-	buf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
-	buf.memory = V4L2_MEMORY_MMAP;
-	if (ioctl_ex(fd, VIDIOC_DQBUF, &buf) == -1)
-	{
-		if (errno == EAGAIN) return TRUE;
-		else 
+		// dequeue a buffer
+		buf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+		buf.memory = V4L2_MEMORY_MMAP;
+		if (ioctl_ex(fd, VIDIOC_DQBUF, &buf) == -1)
 		{
-			c920_video_device_stop(self);
-			WARNING_RETURN(FALSE, "Error while trying to dequeue buffer for device: %s", device_name);
+			if (errno == EAGAIN) 
+			{
+				g_mutex_unlock(&mutex);
+				continue;
+			}
+			else 
+			{
+				g_warning( "Error while trying to dequeue buffer for device: %s", device_name);
+				g_mutex_unlock(&mutex); usleep(1000000); continue;
+			}
 		}
-	}
-	if (buf.index >= self->priv->num_buffers)
-	{
-		c920_video_device_stop(self);
-		WARNING_RETURN(FALSE, "Invalid buffer index for device: %s", device_name);
-	}
-
-	g_mutex_lock(&mutex);
-	if (self->priv->dump_file)
-	{
-		fwrite(self->priv->buffers[buf.index].data, 1, buf.bytesused, self->priv->dump_file);
-		fflush(self->priv->dump_file);
-	}
-	g_mutex_unlock(&mutex);
-
+		if (buf.index >= self->priv->num_buffers)
+		{
+			g_warning("Invalid buffer index for device: %s", device_name);
+			g_mutex_unlock(&mutex); usleep(1000000); continue;
+		}
 	
-	GList *list = g_hash_table_get_values(self->priv->hashtable); 
-	GList *node = list;
+		if (self->priv->dump_file)
+		{
+			fwrite(self->priv->buffers[buf.index].data, 1, buf.bytesused, self->priv->dump_file);
+			fflush(self->priv->dump_file);
+		}
+	
+		GList *list = g_hash_table_get_values(self->priv->hashtable); 
+		GList *node = list;
 
-	do 
-	{
-		struct c920_callback *cb = (struct c920_callback*)list->data;
-		cb->cb(self->priv->buffers[buf.index].data, buf.bytesused, cb->userdata);
-	} while ((node = node->next));
+		do 
+		{
+			struct c920_callback *cb = (struct c920_callback*)list->data;
+			cb->cb(self->priv->buffers[buf.index].data, buf.bytesused, cb->userdata);
+		} while ((node = node->next));
+	
+		g_list_free(list);
 
-	g_list_free(list);
-
-	// queue the buffer again
-	if (ioctl_ex(fd, VIDIOC_QBUF, &buf) == -1)
-	{
-		c920_video_device_stop(self);
-		WARNING_RETURN(FALSE, "Unable to queue buffer for device: %s", device_name);
+		// queue the buffer again
+		if (ioctl_ex(fd, VIDIOC_QBUF, &buf) == -1)
+		{
+			g_warning("Unable to queue buffer for device: %s", device_name);
+			g_mutex_unlock(&mutex); usleep(1000000); continue;
+		}
+		g_mutex_unlock(&mutex);
 	}
-
-	return TRUE;
 }

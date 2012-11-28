@@ -1,8 +1,6 @@
 #ifndef C920_GLOBAL_H
 #define C920_GLOBAL_H
 
-#define G_DEBUG
-
 #include <glib-object.h>
 
 #include <gst/gst.h>

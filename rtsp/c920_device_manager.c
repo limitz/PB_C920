@@ -60,6 +60,8 @@ static void c920_device_manager_class_init(C920DeviceManagerClass *cls)
 	object_class->constructor  = c920_device_manager_construct;
 	object_class->dispose      = c920_device_manager_dispose;
 	object_class->finalize     = c920_device_manager_finalize;
+
+	g_type_class_add_private(cls, sizeof(C920DeviceManagerPrivate));
 }
 
 
@@ -121,7 +123,16 @@ void c920_device_manager_add_device(C920DeviceManager *self, const gchar *name, 
 C920VideoDevice* c920_device_manager_get_device(C920DeviceManager *self, const gchar *name)
 {
 	if (!C920_IS_DEVICE_MANAGER(self)) return NULL;
-	return g_object_ref(g_hash_table_lookup(self->priv->devices, name));
+
+	gpointer *result = g_hash_table_lookup(self->priv->devices, name);
+	if (result) 
+	{
+		g_debug("DEVICE MANAGER: Found device: %s\n", name);
+		g_object_ref(result);
+		return (C920VideoDevice*)result;
+	}
+	else g_warning("DEVICE MANAGER: Unable to find device: %s\n", name);
+	return NULL;
 }
 
 /* C920 Device Manager - Remove a device

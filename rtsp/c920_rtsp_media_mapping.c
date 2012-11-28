@@ -88,6 +88,6 @@ static GstRTSPMediaFactory* c920_rtsp_media_mapping_real_find_media(GstRTSPMedia
 		result = GST_RTSP_MEDIA_FACTORY(g_object_new(C920_TYPE_RTSP_MEDIA_FACTORY,NULL));
 		gst_rtsp_media_mapping_add_factory(base, url->abspath, result);
 		g_object_ref(result);
-	}
+	}	
 	return result;
 }

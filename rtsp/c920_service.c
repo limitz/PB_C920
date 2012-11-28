@@ -13,8 +13,6 @@ int main()
 	g_type_init();
 	gst_init(NULL, NULL);
 	
-	g_log_set_handler(G_LOG_DOMAIN, G_LOG_LEVEL_DEBUG,  g_log_default_handler, NULL);
-
 	main_loop = g_main_loop_new(NULL, FALSE);
 	rtsp_server = g_object_new(C920_TYPE_RTSP_SERVER, NULL);
 	device_manager = g_object_new(C920_TYPE_DEVICE_MANAGER, NULL);
@@ -46,11 +44,13 @@ int main()
                 device_manager,
                 c920_video_device_get_device_name(video2),
                 video2);
-	
-	g_object_unref(video1);
-	g_object_unref(video2);
 
-	c920_rtsp_server_set_address(rtsp_server, "192.168.1.119");
+	c920_video_device_start(video1);
+	
+	//g_object_unref(video1);
+	//g_object_unref(video2);
+
+	c920_rtsp_server_set_address(rtsp_server, "192.168.1.25");
 	c920_rtsp_server_set_service(rtsp_server, "1935");
 	c920_rtsp_server_attach(rtsp_server);
 

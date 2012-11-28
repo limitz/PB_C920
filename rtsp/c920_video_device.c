@@ -730,11 +730,12 @@ gpointer c920_video_device_process(gpointer userdata)
 		GList *list = g_hash_table_get_values(self->priv->hashtable); 
 		GList *node = list;
 
-		do 
+		while (node && node->data) 
 		{
-			struct c920_callback *cb = (struct c920_callback*)list->data;
+			struct c920_callback *cb = (struct c920_callback*)node->data;
 			cb->cb(self->priv->buffers[buf.index].data, buf.bytesused, cb->userdata);
-		} while ((node = node->next));
+			node = node->next;
+		}
 	
 		g_list_free(list);
 

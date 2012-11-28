@@ -175,16 +175,17 @@ static void c920_live_src_set_device_name(C920LiveSrc *self, const gchar *device
 	{
 		c920_video_device_add_callback(self->priv->device, c920_live_src_handle_buffer, self);
 		c920_video_device_start(self->priv->device);
-		g_object_unref(instance);
 
 		self->priv->caps = gst_caps_new_simple(
-			"video/x-raw",
+			"video/x-h264",
 			"width", G_TYPE_INT, c920_video_device_get_width(self->priv->device),
 			"height", G_TYPE_INT, c920_video_device_get_height(self->priv->device),
 			"framerate", GST_TYPE_FRACTION, c920_video_device_get_fps(self->priv->device), 1,
 			NULL);
+		//setting these caps doesn't seem to work, only raw -> h264parse seems to work :s
 		//gst_app_src_set_caps(GST_APP_SRC(self), self->priv->caps);
 	}
+	g_object_unref(instance);
 }
 
 

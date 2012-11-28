@@ -18,6 +18,7 @@ enum
 	N_PROPERTIES
 };
 
+static GMutex mutex = { NULL };
 static GParamSpec *obj_properties[N_PROPERTIES] = { NULL };
 
 struct c920_buffer
@@ -26,13 +27,18 @@ struct c920_buffer
         size_t length;
 };
 
+struct c920_callback
+{
+	C920VideoBufferFunc cb;
+	gpointer userdata;
+};
+
 struct _C920VideoDevicePrivate
 {
 	// properties
 	gchar *device_name, *dump_file_name;
 	guint width, height, fps;
-	C920VideoBufferFunc cb;
-	gpointer cb_userdata;
+	GHashTable *hashtable;	
 	
 	// device io
 	int fd;
@@ -40,6 +46,8 @@ struct _C920VideoDevicePrivate
 	struct c920_buffer *buffers;
 	size_t num_buffers;
 	FILE *dump_file;
+
+	int start_count;
 };
 
 
@@ -49,9 +57,14 @@ static void c920_video_device_get_property(GObject*, guint, GValue*, GParamSpec*
 static void c920_video_device_set_property(GObject*, guint, const GValue*, GParamSpec*);
 static void c920_video_device_dispose(GObject*);
 static void c920_video_device_finalize(GObject*);
+
 static void c920_video_device_set_device_name(C920VideoDevice*, const gchar*);
+static void c920_video_device_set_width(C920VideoDevice*, guint);
+static void c920_video_device_set_height(C920VideoDevice*, guint);
+static void c920_video_device_set_fps(C920VideoDevice*, guint);
 
 static gboolean c920_video_device_process(gpointer userdata);
+static gboolean c920_video_device_equal_func(gconstpointer, gconstpointer);
 
 static int ioctl_ex(int fh, int request, void* arg)
 {
@@ -83,7 +96,7 @@ static void c920_video_device_class_init(C920VideoDeviceClass *cls)
 			"Frame width",
 			"Set the frame width",
 			0, 1920, 1280,
-			G_PARAM_READWRITE);
+			G_PARAM_CONSTRUCT_ONLY | G_PARAM_READWRITE);
 
 	obj_properties[PROP_HEIGHT] =
 		g_param_spec_uint(
@@ -91,7 +104,7 @@ static void c920_video_device_class_init(C920VideoDeviceClass *cls)
 			"Frame height",
 			"Set the frame height",
 			0, 1080, 720,
-			G_PARAM_READWRITE);
+			G_PARAM_CONSTRUCT_ONLY | G_PARAM_READWRITE);
 
 	obj_properties[PROP_FPS] = 
 		g_param_spec_uint(
@@ -99,7 +112,7 @@ static void c920_video_device_class_init(C920VideoDeviceClass *cls)
 			"Frames per second",
 			"Set the frames per second",
 			1, 30, 25,
-			G_PARAM_READWRITE);
+			G_PARAM_CONSTRUCT_ONLY | G_PARAM_READWRITE);
 
 	obj_properties[PROP_DUMP_FILE_NAME] = 
 		g_param_spec_string(
@@ -113,10 +126,15 @@ static void c920_video_device_class_init(C920VideoDeviceClass *cls)
 	g_type_class_add_private(cls, sizeof(C920VideoDevicePrivate));
 }
 
+static gboolean c920_video_device_equal_func(gconstpointer a, gconstpointer b) 
+{
+	return a == b;
+}
 
 static void c920_video_device_init(C920VideoDevice *self)
 {
 	self->priv = C920_VIDEO_DEVICE_GET_PRIVATE(self);
+	self->priv->hashtable = g_hash_table_new_full(g_direct_hash, c920_video_device_equal_func, NULL, g_free);
 }
 
 static void c920_video_device_get_property(GObject* obj, guint pidx, GValue* value, GParamSpec* spec)
@@ -155,8 +173,6 @@ static void c920_video_device_set_property(GObject *obj, guint pidx, const GValu
 {
 	C920VideoDevice *self = C920_VIDEO_DEVICE(obj);
 
-	/* todo: mutex this */
-
 	switch (pidx)
 	{
 		case PROP_DEVICE_NAME:
@@ -187,8 +203,8 @@ static void c920_video_device_set_property(GObject *obj, guint pidx, const GValu
 
 static void c920_video_device_dispose(GObject *obj)
 {
-	C920VideoDevice *self __unused = C920_VIDEO_DEVICE(obj);
-	/* nothing to do for now */
+	C920VideoDevice *self = C920_VIDEO_DEVICE(obj);
+	g_hash_table_destroy(self->priv->hashtable);
 	G_OBJECT_CLASS(c920_video_device_parent_class)->dispose(obj);
 }
 
@@ -196,17 +212,14 @@ static void c920_video_device_finalize(GObject *obj)
 {
 	C920VideoDevice *self = C920_VIDEO_DEVICE(obj);
 	g_free(self->priv->device_name);
-	g_free(self->priv->dump_file_name);
-
-	if (self->priv->started) c920_video_device_stop(self);
-	
+	g_free(self->priv->dump_file_name);	
 	G_OBJECT_CLASS(c920_video_device_parent_class)->finalize(obj);
 }
 
 
 // PROPERTIES
 
-void c920_video_device_set_width(C920VideoDevice *self, guint width)
+static void c920_video_device_set_width(C920VideoDevice *self, guint width)
 {
 	g_return_if_fail(C920_IS_VIDEO_DEVICE(self));
 	g_return_if_fail(width > 0 && width <= 1920);
@@ -220,7 +233,7 @@ guint c920_video_device_get_width(C920VideoDevice *self)
 	return self->priv->width;
 }
 
-void c920_video_device_set_height(C920VideoDevice *self, guint height)
+static void c920_video_device_set_height(C920VideoDevice *self, guint height)
 {
 	g_return_if_fail(C920_IS_VIDEO_DEVICE(self));
 	g_return_if_fail(height > 0 && height <= 1080);
@@ -234,7 +247,7 @@ guint c920_video_device_get_height(C920VideoDevice *self)
 	return self->priv->height;
 }
 
-void c920_video_device_set_fps(C920VideoDevice *self, guint fps)
+static void c920_video_device_set_fps(C920VideoDevice *self, guint fps)
 {
 	g_return_if_fail(C920_IS_VIDEO_DEVICE(self));
 	g_return_if_fail(fps > 0 && fps <= 30);
@@ -264,11 +277,21 @@ const gchar* c920_video_device_get_dump_file_name(C920VideoDevice *self)
 	return self->priv->dump_file_name;
 }
 
-void c920_video_device_set_callback(C920VideoDevice *self, C920VideoBufferFunc callback, gpointer userdata)
+void c920_video_device_add_callback(C920VideoDevice *self, C920VideoBufferFunc callback, gpointer userdata)
 {
 	g_return_if_fail(C920_IS_VIDEO_DEVICE(self));
-	self->priv->cb = callback;
-	self->priv->cb_userdata = userdata;
+
+	struct c920_callback *cb = g_malloc(sizeof(struct c920_callback));
+	cb->cb = callback;
+	cb->userdata = userdata;
+
+	g_hash_table_insert(self->priv->hashtable, userdata, cb);
+}
+
+void c920_video_device_remove_callback_by_data(C920VideoDevice *self, gpointer userdata)
+{
+	g_return_if_fail(C920_IS_VIDEO_DEVICE(self));
+	g_hash_table_remove(self->priv->hashtable, userdata);
 }
 
 static void c920_video_device_set_device_name(C920VideoDevice *self, const gchar* device_name)
@@ -446,8 +469,14 @@ static gboolean c920_video_device_memory_map(C920VideoDevice *self)
 gboolean c920_video_device_start(C920VideoDevice *self)
 {
 	if (!C920_IS_VIDEO_DEVICE(self)) return FALSE;
-
 	enum v4l2_buf_type type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+	
+	g_mutex_lock(&mutex);
+	if (self->priv->start_count)
+	{
+		g_mutex_unlock(&mutex);
+		return TRUE;
+	}
 
 	g_debug("Starting device %s", self->priv->device_name);
 
@@ -480,14 +509,22 @@ gboolean c920_video_device_start(C920VideoDevice *self)
 
 	g_idle_add_full(100, c920_video_device_process, self, NULL);
 
+	self->priv->start_count++;
+	g_mutex_unlock(&mutex);
 	return TRUE;
 }
 
 gboolean c920_video_device_stop(C920VideoDevice *self)
 {
 	if (!C920_IS_VIDEO_DEVICE(self)) return FALSE;
-
 	enum v4l2_buf_type type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+
+	g_mutex_lock(&mutex);
+	if (--self->priv->start_count) 
+	{
+		g_mutex_unlock(&mutex);
+		return TRUE;
+	}
 
 	if (self->priv->fd)
 	{
@@ -497,6 +534,8 @@ gboolean c920_video_device_stop(C920VideoDevice *self)
         		g_warning("Unable to stop device: %s", self->priv->device_name);
 		}
 	}
+
+	g_mutex_unlock(&mutex);
 	return c920_video_device_close(self);
 }
 
@@ -562,7 +601,18 @@ gboolean c920_video_device_process(gpointer userdata)
 		fflush(self->priv->dump_file);
 	}
 
-	if (self->priv->cb) self->priv->cb(self->priv->buffers[buf.index].data, buf.bytesused, self->priv->cb_userdata);
+	
+	//if (self->priv->cb) self->priv->cb(self->priv->buffers[buf.index].data, buf.bytesused, self->priv->cb_userdata);
+	GList *list = g_hash_table_get_values(self->priv->hashtable); 
+	GList *node = list;
+
+	do 
+	{
+		struct c920_callback *cb = (struct c920_callback*)list->data;
+		cb->cb(self->priv->buffers[buf.index].data, buf.bytesused, cb->userdata);
+	} while ((node = node->next));
+
+	g_list_free(list);
 
 	//if (_process_cb) _process_cb(_buffers[buffer.index].data, buffer.bytesused, _userdata);
 

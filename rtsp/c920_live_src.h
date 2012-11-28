@@ -2,6 +2,7 @@
 #define C920_LIVE_SRC_H
 
 #include "c920_global.h"
+#include "c920_device_manager.h"
 
 #define C920_TYPE_LIVE_SRC \
 	(c920_live_src_get_type())

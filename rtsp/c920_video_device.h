@@ -35,7 +35,7 @@
 #define C920_VIDEO_DEVICE_GET_CLASS(obj) \
 	(G_TYPE_INSTANCE_GET_CLASS((obj), C920_TYPE_VIDEO_DEVICE, C920VideoDeviceClass))
 
-typedef void (*C920VideoBufferFunc)(void* data, size_t length, gpointer userdata);
+typedef void (*C920VideoBufferFunc)(gconstpointer data, guint length, gpointer userdata);
 
 typedef struct _C920VideoDevice		C920VideoDevice;
 typedef struct _C920VideoDeviceClass	C920VideoDeviceClass;
@@ -58,20 +58,11 @@ c920_video_device_get_type();
 const gchar* 	
 c920_video_device_get_device_name(C920VideoDevice*);
 
-void 		
-c920_video_device_set_width(C920VideoDevice*, guint);
-
 guint		
 c920_video_device_get_width(C920VideoDevice*);
 
-void		
-c920_video_device_set_height(C920VideoDevice*, guint);
-
 guint		
 c920_video_device_get_height(C920VideoDevice*);
-
-void		
-c920_video_device_set_fps(C920VideoDevice*, guint);
 
 guint		
 c920_video_device_get_fps(C920VideoDevice*);
@@ -89,6 +80,9 @@ gboolean
 c920_video_device_stop(C920VideoDevice*);
 
 void 
-c920_video_device_set_callback(C920VideoDevice*, C920VideoBufferFunc, gpointer);
+c920_video_device_add_callback(C920VideoDevice*, C920VideoBufferFunc, gpointer);
+
+void
+c920_video_device_remove_callback_by_data(C920VideoDevice*, gpointer);
 
 #endif

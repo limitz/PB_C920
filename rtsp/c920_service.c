@@ -34,7 +34,7 @@ int main()
                 "width", 864,
                 "height", 480,
                 "fps", 24,
-                "dump-file-name", "video0.h264",
+                "dump-file-name", "video1.h264",
                 NULL);
 
 	c920_device_manager_add_device(
